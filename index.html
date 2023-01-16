@@ -1,0 +1,20 @@
+<html>
+    <head>
+        <script type="text/javascript">
+            function myFunction(p) {
+              fetch('a',{headers:{'custom':p}}).then((response) => response.json()).then((json) => {
+                    document.getElementById("a").innerHTML = json.a;
+                    document.getElementById("b").innerHTML = json.b;
+                    document.getElementById("c").innerHTML = json.c;
+                });
+            }
+        </script>
+    <head/>
+    <body onload=myFunction('bl')>
+        <p id="a">start</p>
+        <img src=emily_2.jpg>
+        <p id="b">start</p>
+        <p id="c">start</p>
+        <button onclick="myFunction('a')">Click me</button>
+    </body>
+</html>
