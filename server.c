@@ -68,11 +68,162 @@ void sendout(int i, const char *message)
     incorporate_buffer(i, l);
 }
 
+char *indexfiles = NULL;
+long lenindexfiles = 0;
+
+struct {
+    long next;
+    long offset;
+} *ll = NULL;
+long numll = 0;
+long sizell = 0;
+
+struct {
+    char d_name[37];
+    long lloffset;
+} *files = NULL;
+long numfiles = 0;
+long sizefiles = 0;
+
+int obj(const char *name)
+{
+    // first, a binary search We need to find the index 0..buf_len (inclusive)
+    // for which all values less than name will be less than index
+    // index *may* point to the same as name but all larger than name will be index or more
+    int a = 0;
+    int b = numfiles;
+    
+    if (a != b)    // is there an array to look in?
+    {
+        while (a != b)
+        {
+            int m = (a + b) / 2;
+    
+            if (strncmp(files[m].d_name, name, 32) < 0)
+                a = m + 1;
+            else
+                b = m;
+        }
+        
+        // we found the best location in the array, but is it exactly the same key?
+        if (strncmp(files[a].d_name, name, 32) == 0)
+            return a;   // we found it!
+    }
+    
+    return -1;
+}
+
+
+void loadindexfile(int dirfd, const char *d_name)
+{
+    int fd = openat(dirfd, d_name, O_RDONLY);
+    my_assert(fd > 0, "loadindexfile openat");
+    
+    struct stat statbuf;
+    my_assert(fstat(fd, &statbuf) == 0, "loadindexfile fstat");
+    
+    lenindexfiles += statbuf.st_size;
+    indexfiles = realloc(indexfiles, lenindexfiles + 1);
+    my_assert(indexfiles != NULL, "loadindexfile realloc");
+    indexfiles[lenindexfiles] = '\0';
+    
+    while (statbuf.st_size)
+    {
+        ssize_t bytesread = read(fd, indexfiles + lenindexfiles - statbuf.st_size, statbuf.st_size);
+        my_assert(bytesread > 0, "loadindexfile read");
+        statbuf.st_size -= bytesread;
+    }
+    my_assert(close(fd) == 0, "loadindexfile close");
+}
+
+void loadindexdir(int dirfd, const char *d_name)
+{
+    dirfd = openat(dirfd, d_name, O_RDONLY);
+    my_assert(dirfd > 0, "loadindexdir openat");
+
+    DIR *dd = fdopendir(dirfd);
+    my_assert(dd != NULL, "loadindexdir fdopendir");
+    
+    struct dirent *de;
+    while ((de = readdir(dd)) != NULL)
+        if (de->d_name[0] != '.')
+        {
+            if (de->d_type == DT_REG && strstr(de->d_name, ".md5s"))
+                loadindexfile(dirfd, de->d_name);
+
+            if (de->d_type == DT_DIR)
+                loadindexdir(dirfd, de->d_name);
+        }
+    my_assert(closedir(dd) == 0, "loadindexdir closedir");
+}
+
 int main()
 {
     strcpy(logfile_path, "server.log");
-    write_a_log_line("server starting");
+    write_a_log_line("server starting. read index images");
     
+    DIR *dd = opendir("/home/joeruff/m/index/");
+    my_assert(dd != NULL, "opendir");
+    
+    struct dirent *de;
+    while ((de = readdir(dd)) != NULL)
+        if (de->d_name[0] != '.')
+        {
+            my_assert(strlen(de->d_name) == 36, "filename length");
+            if (files == NULL || numfiles == sizefiles)
+            {
+                if (sizefiles)
+                    sizefiles *= 2;
+                else
+                    sizefiles = 1000;
+                files = realloc(files, sizefiles * sizeof(files[0]));
+                my_assert(files != NULL, "realloc files");
+            }
+            strcpy(files[numfiles].d_name, de->d_name);
+            files[numfiles].lloffset = 0;
+            numfiles++;
+        }
+    my_assert(closedir(dd) == 0, "closedir");
+
+    write_a_log_line("sort index images");
+
+    qsort(files, numfiles, sizeof(files[0]), (int (*)(const void *, const void *)) strcmp);
+
+    write_a_log_line("read md5s");
+
+    int dirfd = open("/home/joeruff/m/", O_RDONLY);
+    my_assert(dirfd > 0, "open /home/joeruff/m/");
+    loadindexfile(dirfd, "pe.md5s");
+    loadindexdir(dirfd, "in");
+    
+    write_a_log_line("link files");
+    long off = 0;
+    while (off < lenindexfiles)
+    {
+        char *nextnl = strchr(indexfiles + off, '\n');
+        my_assert(nextnl != NULL, "newlines");
+        *nextnl = '\0';
+        long idx = obj(indexfiles + off);
+        if (idx >= 0)
+        {
+            if (ll == NULL || numll == sizell)
+            {
+                if (sizell)
+                    sizell *= 2;
+                else
+                    sizell = 1000;
+                ll = realloc(ll, sizell * sizeof(files[0]));
+                my_assert(ll != NULL, "realloc ll");
+            }
+            ll[numll].offset = off;
+            ll[numll].next = files[idx].lloffset;
+            files[idx].lloffset = numll;
+            numll++;
+        }
+        off = nextnl - indexfiles + 1;
+    }
+    
+            
     int fd = open("index.html", O_RDONLY);
     my_assert(fd > 0, "open index.html");
     struct stat statbuf;
@@ -103,6 +254,7 @@ int main()
     my_assert(bind(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, (struct sockaddr *) &addr,  sizeof(addr)) == 0, "bind");
     my_assert(listen(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, 5) == 0, "listen");
 
+    write_a_log_line("start loop");
     while (1)
     {
         for (i = 0; i < MAXIMUM_NUMBER_OF_CLIENT_LISTENERS; i++)
