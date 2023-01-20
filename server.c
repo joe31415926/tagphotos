@@ -72,7 +72,7 @@ char *indexfiles = NULL;
 long lenindexfiles = 0;
 
 struct {
-    long next;
+    long lloffset;
     long offset;
 } *ll = NULL;
 long numll = 0;
@@ -159,6 +159,8 @@ void loadindexdir(int dirfd, const char *d_name)
 
 int main()
 {
+    srandom(time(NULL));
+    
     strcpy(logfile_path, "server.log");
     write_a_log_line("server starting. read index images");
     
@@ -169,25 +171,37 @@ int main()
     while ((de = readdir(dd)) != NULL)
         if (de->d_name[0] != '.')
         {
-            my_assert(strlen(de->d_name) == 36, "filename length");
-            if (files == NULL || numfiles == sizefiles)
+            if (strlen(de->d_name) == 36)
             {
-                if (sizefiles)
-                    sizefiles *= 2;
-                else
-                    sizefiles = 1000;
-                files = realloc(files, sizefiles * sizeof(files[0]));
-                my_assert(files != NULL, "realloc files");
+                my_assert(strlen(de->d_name) == 36, "filename length");
+                if (files == NULL || numfiles == sizefiles)
+                {
+                    if (sizefiles)
+                        sizefiles *= 2;
+                    else
+                        sizefiles = 1000;
+                    files = realloc(files, sizefiles * sizeof(files[0]));
+                    my_assert(files != NULL, "realloc files");
+                }
+                strcpy(files[numfiles].d_name, de->d_name);
+                files[numfiles].lloffset = 0;
+                numfiles++;
             }
-            strcpy(files[numfiles].d_name, de->d_name);
-            files[numfiles].lloffset = 0;
-            numfiles++;
         }
     my_assert(closedir(dd) == 0, "closedir");
+    int i;
 
-    write_a_log_line("sort index images");
+    char logline[100];
+    sprintf(logline, "sort %ld index images", numfiles);
+    write_a_log_line(logline);
 
     qsort(files, numfiles, sizeof(files[0]), (int (*)(const void *, const void *)) strcmp);
+
+    write_a_log_line(files[0].d_name);
+    write_a_log_line(files[1].d_name);
+    write_a_log_line("...");
+    write_a_log_line(files[numfiles - 2].d_name);
+    write_a_log_line(files[numfiles - 1].d_name);
 
     write_a_log_line("read md5s");
 
@@ -196,13 +210,17 @@ int main()
     loadindexfile(dirfd, "pe.md5s");
     loadindexdir(dirfd, "in");
     
-    write_a_log_line("link files");
+    sprintf(logline, "link %ld bytes of md5s files", lenindexfiles);
+    write_a_log_line(logline);
+
+    long nummd5slines = 0;
     long off = 0;
     while (off < lenindexfiles)
     {
         char *nextnl = strchr(indexfiles + off, '\n');
         my_assert(nextnl != NULL, "newlines");
         *nextnl = '\0';
+        nummd5slines++;
         long idx = obj(indexfiles + off);
         if (idx >= 0)
         {
@@ -212,17 +230,41 @@ int main()
                     sizell *= 2;
                 else
                     sizell = 1000;
-                ll = realloc(ll, sizell * sizeof(files[0]));
+                ll = realloc(ll, sizell * sizeof(ll[0]));
                 my_assert(ll != NULL, "realloc ll");
             }
             ll[numll].offset = off;
-            ll[numll].next = files[idx].lloffset;
+            ll[numll].lloffset = files[idx].lloffset;
             files[idx].lloffset = numll;
             numll++;
         }
         off = nextnl - indexfiles + 1;
     }
     
+    sprintf(logline, "compute hist nummd5slines %ld numll %ld", nummd5slines, numll);
+    write_a_log_line(logline);
+
+    long hist[20] = {0};
+    for (i = 0; i < numfiles; i++)
+    {
+        int count = 0;
+        long lloffset = files[i].lloffset;
+        while (lloffset)
+        {
+            count++;
+            lloffset = ll[lloffset].lloffset;
+            my_assert(lloffset >= 0 && lloffset < numll, "linked list bounds checking logic error");
+        }
+        if (count > 19) count = 19;
+        hist[count]++;
+    }
+    for (i = 0; i < 19; i++)
+    {
+        sprintf(logline, "hist %d %ld", i, hist[i]);
+        write_a_log_line(logline);
+    }
+    sprintf(logline, "hist >%d %ld", 19, hist[19]);
+    write_a_log_line(logline);
             
     int fd = open("index.html", O_RDONLY);
     my_assert(fd > 0, "open index.html");
@@ -236,7 +278,6 @@ int main()
     index_buf_len += statbuf.st_size;
     close(fd);
     
-    int i;
     for (i = 0; i < MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 1; i++)
         fds[i].fd = -1;
 
@@ -253,6 +294,11 @@ int main()
 
     my_assert(bind(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, (struct sockaddr *) &addr,  sizeof(addr)) == 0, "bind");
     my_assert(listen(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, 5) == 0, "listen");
+
+    int dirfd_index = open("/home/joeruff/m/index/", O_RDONLY);
+    my_assert(dirfd_index > 0, "open /home/joeruff/m/index/");
+    int dirfd_i = open("/home/joeruff/m/i/", O_RDONLY);
+    my_assert(dirfd_i > 0, "open /home/joeruff/m/i/");
 
     write_a_log_line("start loop");
     while (1)
@@ -311,8 +357,35 @@ int main()
                         }
                         else if (strncmp(inbuffers[i], "GET /a ", 7) == 0)
                         {
-                            char buf[] = "{\"a\":\"<a href=a>a content</a>\", \"b\":\"b content\", \"c\":\"c content\"}";
-                            getspace(i, 1000);
+                            int idx = random() % numfiles;
+                            char pap1[2000] = "";
+                            char pap[2000] = "";
+                            long lloffset = files[idx].lloffset;
+                            if (lloffset)
+                            {
+                                char *fullline = indexfiles + ll[lloffset].offset;
+                                int i;
+                                for (i = 0; i < 7; i++)
+                                {
+                                    while (*fullline != ' ') fullline++;
+                                    fullline++;
+                                }
+                                strcpy(pap1, fullline);
+                            }
+                            while (lloffset)
+                            {
+                                char *fullline = indexfiles + ll[lloffset].offset;
+                                strcat(pap, "<a onclick=myFunction('");
+                                strcat(pap, fullline + strlen(fullline) - 40);
+                                strcat(pap, "')>");
+                                strcat(pap, fullline + strlen(fullline) - 40);
+                                strcat(pap, "</a><br>");
+                                lloffset = ll[lloffset].lloffset;
+                            }
+                            
+                            char buf[5000];
+                            sprintf(buf, "{\"a\":\"%s\", \"md5\":\"%s\", \"d\":\"%s\"}", pap1, files[idx].d_name, pap);
+                            getspace(i, 5000);
                             sprintf(outbuffers[i] + bytes_to_send[i], "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Type: application/json\r\nContent-Length: %ld\r\n\r\n", strlen(buf));
                             incorporate_buffer(i, strlen(outbuffers[i] + bytes_to_send[i]));
                             strcpy(outbuffers[i] + bytes_to_send[i], buf);
@@ -327,13 +400,18 @@ int main()
                                 if (space)
                                 {
                                     *space = '\0';
-                                    int fd = open(inbuffers[i] + 5, O_RDONLY);
+                                    int fd = -1;
+                                    if (strstr(inbuffers[i] + 5, ".jpg"))
+                                        fd = openat(dirfd_index, inbuffers[i] + 5, O_RDONLY);
+                                    else
+                                        fd = openat(dirfd_i, inbuffers[i] + 5, O_RDONLY);
+
                                     if (fd > 0)
                                     {
                                         struct stat statbuf;
                                         assert(fstat(fd, &statbuf) == 0);
                                         getspace(i, 1000 + statbuf.st_size);
-                                        sprintf(outbuffers[i] + bytes_to_send[i], "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Type: image/jpeg\r\nContent-Length: %ld\r\n\r\n", statbuf.st_size);
+                                        sprintf(outbuffers[i] + bytes_to_send[i], "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Type: image/jpeg\r\nCache-Control: max-age=31536000, immutable\r\nContent-Length: %ld\r\n\r\n", statbuf.st_size);
                                         incorporate_buffer(i, strlen(outbuffers[i] + bytes_to_send[i]));
                                         while (statbuf.st_size)
                                         {

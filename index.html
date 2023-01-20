@@ -1,20 +1,26 @@
 <html>
     <head>
         <script type="text/javascript">
+            var md5;
             function myFunction(p) {
-              fetch('a',{headers:{'custom':p}}).then((response) => response.json()).then((json) => {
+              fetch('a',{headers:{'button':p,'md5':md5}}).then((response) => response.json()).then((json) => {
+                  md5 = json.md5;
                     document.getElementById("a").innerHTML = json.a;
-                    document.getElementById("b").innerHTML = json.b;
-                    document.getElementById("c").innerHTML = json.c;
+                    document.getElementById("b").src = md5;
+                    document.getElementById("c").href = md5.substring(0, md5.length - 4);
+                    document.getElementById("d").innerHTML = json.d;
                 });
             }
         </script>
     <head/>
-    <body onload=myFunction('bl')>
-        <p id="a">start</p>
-        <img src=emily_2.jpg width=800>
-        <p id="b">start</p>
-        <p id="c">start</p>
-        <button onclick="myFunction('a')">Click me</button>
+    <body onload=myFunction()>
+    <table width = "100%" border = "0">
+    <tr><td colspan=2><p id="a"></p></td></tr>
+    <tr valign = "top"><td>        <a id="c"><img id="b" width=800 /></a></td><td>
+
+        <button onclick="myFunction('hide1')">hide1</button><br/>
+        <button onclick="myFunction('hide2')">hide2</button><br/>
+        <p id="d"></p>
+        </td></tr></table>
     </body>
 </html>
