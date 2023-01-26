@@ -48,11 +48,44 @@ void vectorfile(double *Aarr, int *idx, char *beginning_of_file)
     assert(strncmp(beginning_of_file, "P6\n256 256\n255\n", 15) == 0);
     
     uint8_t *d = beginning_of_file + 15;
+    
+    long i;
+    for (i = 0; i < 256L * 256L; i++)
+    {
+        uint8_t red = d[3L * i + 0];
+        uint8_t green = d[3L * i + 1];
+        uint8_t blue = d[3L * i + 2];
+        
+        double Y = 0.299*red + 0.587*green + 0.114*blue;
+        double I = 0.596*red - 0.275*green - 0.321*blue;
+        double Q = 0.212*red - 0.523*green + 0.311*blue;
+        
+        if (Y < 0.5)
+            d[3L * i + 0] = 0;
+        else if (Y > 254.5)
+            d[3L * i + 0] = 255;
+        else
+            d[3L * i + 0] = Y;
+            
+        if (I < 0.5)
+            d[3L * i + 1] = 0;
+        else if (I > 254.5)
+            d[3L * i + 1] = 255;
+        else
+            d[3L * i + 1] = I;
+                
+        if (Q < 0.5)
+            d[3L * i + 2] = 0;
+        else if (Q > 254.5)
+            d[3L * i + 2] = 255;
+        else
+            d[3L * i + 2] = Q;
+    }
+
 
     long color;
     for (color = 0; color < 3; color++)
     {
-        long i;
         for (i = 0; i < 256L * 256L; i++)
             Aarr[i] = ((double) d[3L * i + color]) / 16.0 / 16.0;
         
