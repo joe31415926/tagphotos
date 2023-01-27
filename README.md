@@ -45,7 +45,7 @@
    
 5. The directory /home/joeruff/m/match contains exactly one ppm file for each jpg file in /home/joeruff/m/index
 
-   I thought it would go faster if I concatinated all the ppms into one giant file to compute the vectors
+   I thought it would go faster if I concatinated all the ppms into one giant file to compute the vectors. It is important to sort so we can match the image "number" with the filename in the end.
 
    ```
    cd /home/joeruff/m/
