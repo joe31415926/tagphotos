@@ -5,10 +5,19 @@
             function myFunction(p) {
               fetch('a',{headers:{'button':p,'md5':md5}}).then((response) => response.json()).then((json) => {
                   md5 = json.md5;
+                  md51 = json.md51;
+                  md52 = json.md52;
+                  md53 = json.md53;
                     document.getElementById("a").innerHTML = json.a;
                     document.getElementById("b").src = md5;
                     document.getElementById("c").href = md5.substring(0, md5.length - 4);
                     document.getElementById("d").innerHTML = json.d;
+                    document.getElementById("b1").src = md51;
+                    document.getElementById("c1").href = md51.substring(0, md51.length - 4);
+                    document.getElementById("b2").src = md52;
+                    document.getElementById("c2").href = md52.substring(0, md52.length - 4);
+                    document.getElementById("b3").src = md53;
+                    document.getElementById("c3").href = md53.substring(0, md53.length - 4);
                 });
             }
         </script>
@@ -16,11 +25,14 @@
     <body onload=myFunction()>
     <table width = "100%" border = "0">
     <tr><td colspan=2><p id="a"></p></td></tr>
-    <tr valign = "top"><td>        <a id="c"><img id="b" width=800 /></a></td><td>
+    <tr valign = "top"><td>        <a id="c"><img id="b" width=600 /></a></td><td>
 
         <button onclick="myFunction('hide1')">hide1</button><br/>
         <button onclick="myFunction('hide2')">hide2</button><br/>
-        <p id="d"></p>
+        <p id="d"></p><br/>
+        <a id="c1"><img id="b1" width=300 /></a><br/>
+        <a id="c2"><img id="b2" width=300 /></a><br/>
+        <a id="c3"><img id="b3" width=300 /></a>
         </td></tr></table>
     </body>
 </html>

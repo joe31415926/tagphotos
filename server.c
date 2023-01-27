@@ -79,8 +79,17 @@ long numll = 0;
 long sizell = 0;
 
 struct {
+    long matcha;
+    long matchb;
+    double matchm;
+} *matchll = NULL;
+long nummatchll = 0;
+long sizematchll = 0;
+
+struct {
     char d_name[37];
     long lloffset;
+    long matchlloffset;
 } *files = NULL;
 long numfiles = 0;
 long sizefiles = 0;
@@ -157,12 +166,31 @@ void loadindexdir(int dirfd, const char *d_name)
     my_assert(closedir(dd) == 0, "loadindexdir closedir");
 }
 
+int mylongcmp(void *ap, void *bp)
+{
+    long *a = (long *)ap;
+    long *b = (long *)bp;
+    if (*a < *b)
+        return -1;
+    if (*a > *b)
+        return 1;
+    double *da = (double *)(a + 2);
+    double *db = (double *)(b + 2);
+    if (*da < *db)
+        return -1;
+    if (*da > *db)
+        return 1;
+    return 0;
+}
+
 int main()
 {
     srandom(time(NULL));
     
     strcpy(logfile_path, "server.log");
     write_a_log_line("server starting. read index images");
+    
+    /* =========               /home/joeruff/m/index/              ========= */
     
     DIR *dd = opendir("/home/joeruff/m/index/");
     my_assert(dd != NULL, "opendir");
@@ -205,13 +233,20 @@ int main()
 
     write_a_log_line("read md5s");
 
+    /* =========               /home/joeruff/m/pe.md5s              ========= */
+
     int dirfd = open("/home/joeruff/m/", O_RDONLY);
     my_assert(dirfd > 0, "open /home/joeruff/m/");
     loadindexfile(dirfd, "pe.md5s");
+    
+    /* =========               /home/joeruff/m/in              ========= */
+    
     loadindexdir(dirfd, "in");
     
     sprintf(logline, "link %ld bytes of md5s files", lenindexfiles);
     write_a_log_line(logline);
+
+    /* =========              software: link images to paths              ========= */
 
     long nummd5slines = 0;
     long off = 0;
@@ -244,6 +279,8 @@ int main()
     sprintf(logline, "compute hist nummd5slines %ld numll %ld", nummd5slines, numll);
     write_a_log_line(logline);
 
+    /* =========              software: print out hist              ========= */
+
     long hist[20] = {0};
     for (i = 0; i < numfiles; i++)
     {
@@ -266,6 +303,67 @@ int main()
     sprintf(logline, "hist >%d %ld", 19, hist[19]);
     write_a_log_line(logline);
             
+    FILE *matched = fopen("/home/joeruff/server/parallel_matches/all.txt", "r");
+    assert(matched);
+    
+    long matcha, matchb;
+    double matchm;
+    while (fscanf(matched, "%ld %ld %lg\n", &matcha, &matchb, &matchm) == 3)
+    {
+        if (nummatchll + 2 >= sizematchll)
+        {
+            if (sizematchll == 0)
+                sizematchll = 1000000;
+            else
+                sizematchll *= 2;
+            matchll = realloc(matchll, sizematchll * sizeof(matchll[0]));
+            my_assert(matchll != NULL, "matchll realloc");
+        }
+        matchll[nummatchll].matcha = matcha;
+        matchll[nummatchll].matchb = matchb;
+        matchll[nummatchll].matchm = matchm;
+        nummatchll++;
+        matchll[nummatchll].matcha = matchb;
+        matchll[nummatchll].matchb = matcha;
+        matchll[nummatchll].matchm = matchm;
+        nummatchll++;
+    }
+
+    qsort(matchll, nummatchll, sizeof(matchll[0]), (int (*)(const void *, const void *)) mylongcmp);
+
+    for (i = 0; i < numfiles; i++)
+        files[i].matchlloffset = -1;
+        
+    long scanmatchlloffset = matchll[0].matcha;
+    files[scanmatchlloffset].matchlloffset = 0;
+    for (i = 1; i < nummatchll; i++)
+        if (matchll[i].matcha != scanmatchlloffset)
+        {
+            scanmatchlloffset = matchll[i].matcha;
+            files[scanmatchlloffset].matchlloffset = i;
+        }
+    
+    sprintf(logline, "nummatchll %ld", nummatchll);
+    write_a_log_line(logline);
+    sprintf(logline, "%ld %ld %g", matchll[0].matcha, matchll[0].matchb, matchll[0].matchm);
+    write_a_log_line(logline);
+    sprintf(logline, "%ld %ld %g", matchll[1].matcha, matchll[1].matchb, matchll[1].matchm);
+    write_a_log_line(logline);
+    sprintf(logline, "%ld %ld %g", matchll[2].matcha, matchll[2].matchb, matchll[2].matchm);
+    write_a_log_line(logline);
+    write_a_log_line("...");
+    sprintf(logline, "%ld %ld %g", matchll[nummatchll - 3].matcha, matchll[nummatchll - 3].matchb, matchll[nummatchll - 3].matchm);
+    write_a_log_line(logline);
+    sprintf(logline, "%ld %ld %g", matchll[nummatchll - 2].matcha, matchll[nummatchll - 2].matchb, matchll[nummatchll - 2].matchm);
+    write_a_log_line(logline);
+    sprintf(logline, "%ld %ld %g", matchll[nummatchll - 1].matcha, matchll[nummatchll - 1].matchb, matchll[nummatchll - 1].matchm);
+    write_a_log_line(logline);
+    
+    
+    fclose(matched);
+
+    /* =========               /home/joeruff/server/index.html              ========= */
+
     int fd = open("index.html", O_RDONLY);
     my_assert(fd > 0, "open index.html");
     struct stat statbuf;
@@ -332,15 +430,20 @@ int main()
                 }
                 
                 ssize_t bytes_recv = recv(fds[i].fd, inbuffers[i] + bytes_received[i], inbuffer_size[i] - bytes_received[i] - 1, 0);
-                if (bytes_recv == 0)
+                if (bytes_recv < 0)
                 {
-                    write_a_log_line("remote client closed conection");
+                    if (bytes_recv == 0)
+                        write_a_log_line("remote client closed conection");
+                    else
+                    {
+                        sprintf(logline, "remote client closed %ld", (long) bytes_recv);
+                        write_a_log_line(logline);
+                    }
                     close(fds[i].fd);
                     fds[i].fd = -1;
                 }
                 else
                 {
-                    my_assert(bytes_recv > 0, "recv");
                     bytes_received[i] += bytes_recv;
                     inbuffers[i][bytes_received[i]] = '\0';
                     if (strstr(inbuffers[i], "\r\n\r\n"))
@@ -383,8 +486,47 @@ int main()
                                 lloffset = ll[lloffset].lloffset;
                             }
                             
+                            sprintf(logline, "idx %d", idx);
+                            write_a_log_line(logline);
+                            sprintf(logline, "files[idx].matchlloffset %ld", files[idx].matchlloffset);
+                            write_a_log_line(logline);
+                            
+                            long mymatches[3] = {0};
+                            if (files[idx].matchlloffset != -1)
+                            {
+
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 0].matcha %ld", matchll[files[idx].matchlloffset + 0].matcha);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 0].matchb %ld", matchll[files[idx].matchlloffset + 0].matchb);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 0].matchm %g", matchll[files[idx].matchlloffset + 0].matchm);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 1].matcha %ld", matchll[files[idx].matchlloffset + 1].matcha);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 1].matchb %ld", matchll[files[idx].matchlloffset + 1].matchb);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 1].matchm %g", matchll[files[idx].matchlloffset + 1].matchm);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 2].matcha %ld", matchll[files[idx].matchlloffset + 2].matcha);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 2].matchb %ld", matchll[files[idx].matchlloffset + 2].matchb);
+                                write_a_log_line(logline);
+                                sprintf(logline, "matchll[files[idx].matchlloffset + 2].matchm %g", matchll[files[idx].matchlloffset + 2].matchm);
+                                write_a_log_line(logline);
+                                sprintf(logline, "%ld %s", matchll[files[idx].matchlloffset + 0].matchb, files[matchll[files[idx].matchlloffset + 0].matchb].d_name);
+                                write_a_log_line(logline);
+                                sprintf(logline, "%ld %s", matchll[files[idx].matchlloffset + 1].matchb, files[matchll[files[idx].matchlloffset + 1].matchb].d_name);
+                                write_a_log_line(logline);
+                                sprintf(logline, "%ld %s", matchll[files[idx].matchlloffset + 2].matchb, files[matchll[files[idx].matchlloffset + 2].matchb].d_name);
+                                write_a_log_line(logline);
+
+                                mymatches[0] = matchll[files[idx].matchlloffset + 0].matchb;
+                                mymatches[1] = matchll[files[idx].matchlloffset + 1].matchb;
+                                mymatches[2] = matchll[files[idx].matchlloffset + 2].matchb;
+                            }
+                            
                             char buf[5000];
-                            sprintf(buf, "{\"a\":\"%s\", \"md5\":\"%s\", \"d\":\"%s\"}", pap1, files[idx].d_name, pap);
+                            sprintf(buf, "{\"a\":\"%s\", \"md5\":\"%s\", \"md51\":\"%s\", \"md52\":\"%s\", \"md53\":\"%s\", \"d\":\"%s\"}", pap1, files[idx].d_name, files[mymatches[0]].d_name, files[mymatches[1]].d_name, files[mymatches[2]].d_name, pap);
                             getspace(i, 5000);
                             sprintf(outbuffers[i] + bytes_to_send[i], "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Type: application/json\r\nContent-Length: %ld\r\n\r\n", strlen(buf));
                             incorporate_buffer(i, strlen(outbuffers[i] + bytes_to_send[i]));
