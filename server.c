@@ -94,6 +94,32 @@ struct {
 long numfiles = 0;
 long sizefiles = 0;
 
+typedef enum {
+    FILES = 0,
+    MD5S,
+    NUMTYPES,
+} buffer_type;
+
+// #pragma pack(push, 1)
+struct {
+    uint32_t size;
+    uint32_t length;
+    buffer_type t;
+    union {
+        struct {
+            char path[256];
+            uint64_t f[];
+        } files;
+        struct {
+            int somethingelse;
+            char b[];
+        } md5s;
+    };
+} *ds[NUMTYPES];
+
+// #pragma pack(pop)
+     
+
 int obj(const char *name)
 {
     // first, a binary search We need to find the index 0..buf_len (inclusive)
@@ -185,6 +211,8 @@ int mylongcmp(void *ap, void *bp)
 
 int main()
 {
+    printf("%ld\n", sizeof(*ds[FILES]));
+    
     srandom(time(NULL));
     
     strcpy(logfile_path, "server.log");
