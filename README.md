@@ -15,12 +15,10 @@
    Extract the jpegs and convert them to an index file which is exactly 300 pixels wide
 
    ```
-   grep -i jpeg /home/joeruff/filetypes.txt | sed -e 's/^i\/\([^ ]*\): .* \([0-9]*\)x\([0-9]*\), .*$/\1 \2 \3/' | grep -v "/" | /home/joeruff/m/command
-   sort -R commands.sh > commands_rand.sh
-   split -l 333333 commands_rand.sh
-   nohup ./xaa &
-   nohup ./xab &
-   nohup ./xac &
+   cd /home/joeruff/server
+   gcc -o command command.c
+   grep -i jpeg /home/joeruff/filetypes.txt | sed -e 's/^i\/\([^ ]*\): .* \([0-9]*\)x\([0-9]*\), .*$/\1 \2 \3/' | grep -v "/" | /home/joeruff/server/command | sort -R | split -l 40000
+   ls -1 xa* | sed -e 's/^\(.*\)$/nohup .\/\1 \&/'
    ```
 
 3. The directory /home/joeruff/m/index contains small (300 pixels wide) versions of each of the jpegs (72% of total)
