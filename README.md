@@ -45,44 +45,29 @@
    
 5. The directory /home/joeruff/m/match contains exactly one ppm file for each jpg file in /home/joeruff/m/index
 
-   I thought it would go faster if I concatinated all the ppms into one giant file to compute the vectors. It is important to sort so we can match the image "number" with the filename in the end.
+   Finally, compute the vectors for each ppm file from the paper [Fast Multiresolution Image Querying](https://grail.cs.washington.edu/projects/query/mrquery.pdf) using a program with 25 threads. It usually takes about 24 minutes...
 
    ```
-   cd /home/joeruff/m/
-   find match/ -type f | sort | sed -e 's/^\(.*\)$/cat \1 >> matchall/' > concat.sh
-   chmod a+x concat.sh 
-   nohup ./concat.sh &
-   ```
-   
-6. The single file /home/joeruff/m/matchall contains all the ppm images concatinated
+   cd /home/joeruff/server
+   gcc -o vector vector.c -pthread
+   time ./vector
+   counting the number of files...
+   numfiles: 961668
+   reading the filenames....
+   filenames read
+   9 0/38467
+   19 0/38467
+   18 0/38467
+   14 0/38467
+   11 0/38467
+   ...
+   22 38000/38467
+   23 38000/38467
+   24 38000/38467
 
-   Finally, compute the vectors from the paper [Fast Multiresolution Image Querying](https://grail.cs.washington.edu/projects/query/mrquery.pdf)
-
+   real	23m49.804s
+   user	485m8.342s
+   sys	1m40.850s
    ```
-   gcc -o vector vector.c 
-   nohup ./vector &
-   ```
-   
-7. The single file /home/joeruff/m/nohup.out has exactly one line for each index file with three color vectors per line
-
-   I thought the N^2 comparisons between pairs of files would go faster if the data was in a binary file(?)
-   ```
-   gcc -o convert_to_bin convert_to_bin.c 
-    ./convert_to_bin
-   ```
-   
-8. The single file /home/joeruff/server/data.bin has 16 int32_t numbers per color (16 * 4 * 3) for each index file
-
-   I compared all possible combinations of images using 36 threads
-   
-   ```
-   gcc -O3 -pthread -o findmatches findmatches.c
-   ./findmatches
-   mkdir parallel_matches
-   find . -name "matches[0-9][0-9].txt"  -exec mv {} parallel_matches/ \;
-   cd parallel_matches/
-   cat matches* | sort -n -k 3 > all.txt
-   ```
-   
-9. The single file /home/joeruff/server/parallel_matches/all.txt is a combination of all the outputs of all 36 threads
-
+      
+6. The single file /home/joeruff/m/match.bin has a 32 byte filename and 16 int32_t numbers per color (32 + 16 * 4 * 3 = ) for each index file

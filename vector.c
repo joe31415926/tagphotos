@@ -7,9 +7,21 @@
 #include <stdint.h>
 #include <fcntl.h>
 #include <math.h>
+#include <dirent.h>
+#include <pthread.h>
 
-#define NUM_BATCH (36L)
-#define FILES_PER_BATCH (26713L)
+#define PPM_DIRECTORY ("/home/joeruff/m/match/")
+#define OUTPUT_FILE_B ("/home/joeruff/m/match.bin")
+
+#define NUM_THREADS (25)
+long numfiles = 0;
+long files_per_thread = 0;
+
+struct {
+    char filename[32];
+    int32_t param[3][16];
+} *dat = NULL;
+
 #define BYTES_PER_FILE (196623L)
 
 void DecomposeArray(double *A)
@@ -43,7 +55,7 @@ int compar(const void *ap, const void *bp, void *context)
     return 0;
 }
 
-void vectorfile(double *Aarr, int *idx, char *beginning_of_file)
+void vectorfile(double *Aarr, int *idx, char *beginning_of_file, int32_t param[3][16])
 {
     assert(strncmp(beginning_of_file, "P6\n256 256\n255\n", 15) == 0);
     
@@ -113,22 +125,23 @@ void vectorfile(double *Aarr, int *idx, char *beginning_of_file)
 
         qsort_r(idx, 256L * 256L, sizeof(idx[0]), compar, Aarr);
         
-        printf("%d ", (int) Aarr[0]);
+        
+        uint32_t *p = param[color];
+        *p++ = (int) Aarr[0];
         
         int num = 15;
         for (i = 0; i < num; i++)
             if (idx[i])
             {
                 int sign = Aarr[idx[i]] < 0.0 ? -1 : 1;
-                printf("%d ", sign * idx[i]);
+                *p++ = sign * idx[i];
             }
             else
                 num++;
     }
-    printf("\n");
 }
 
-int main()
+void *worker(void *arg)
 {
     double *Aarr = (double *) malloc(256 * 256 * sizeof(double));
     assert(Aarr);
@@ -136,30 +149,107 @@ int main()
     int *idx = (int *) malloc(256 * 256 * sizeof(int));
     assert(idx);
     
-    int fd = open("/home/joeruff/m/matchall", O_RDONLY);
-    assert(fd > 0);
-    
-    char *buf = malloc(FILES_PER_BATCH * BYTES_PER_FILE);
+    char *buf = malloc(BYTES_PER_FILE);
     assert(buf);
-    
-    int batch;
-    for (batch = 0; batch < NUM_BATCH; batch++)
+
+    long start_idx = (long) arg;
+    long i;
+    for (i = 0; i < files_per_thread; i++)
     {
+        char filename[100] = {0};
+        strcpy(filename, PPM_DIRECTORY);
+        strncpy(filename + strlen(filename), dat[start_idx + i].filename, 32);
+        strcat(filename, ".ppm");
+
+        int fd = open(filename, O_RDONLY);
+        assert(fd > 0);
+
         char *tohere = buf;
-        ssize_t toread = FILES_PER_BATCH * BYTES_PER_FILE;
+        ssize_t toread = BYTES_PER_FILE;
         while (toread)
         {
-            ssize_t readthistime = toread;
-            if (readthistime > 1024 * 1024 * 1024)
-                readthistime = 1024 * 1024 * 1024;
-            readthistime = read(fd, tohere, readthistime);
+            ssize_t readthistime = read(fd, tohere, toread);
             assert(readthistime > 0);
             toread -= readthistime;
             tohere += readthistime;
         }
+        close(fd);
         
-        long file;
-        for (file = 0; file < FILES_PER_BATCH; file++)
-            vectorfile(Aarr, idx, buf + file * BYTES_PER_FILE);
+        vectorfile(Aarr, idx, buf, dat[start_idx + i].param);
+        
+        if (i % 1000 == 0)
+            printf("%ld %ld/%ld\n", start_idx, i, files_per_thread);
     }
+}
+
+int main()
+{
+    printf("counting the number of files...\n");
+
+    int dirfd = open(PPM_DIRECTORY, O_RDONLY);
+    assert(dirfd > 0);
+    
+    DIR *dd = fdopendir(dirfd);
+    assert(dd);
+    
+    numfiles = 0;
+    struct dirent *de;
+    while ((de = readdir(dd)) != NULL)
+        if (de->d_name[0] != '.')
+        {
+            if (de->d_type == DT_REG)
+            {
+                assert(strlen(de->d_name) == 36 && strcmp(de->d_name + 32, ".ppm") == 0);
+                numfiles++;
+            }
+        }
+    assert(closedir(dd) == 0);
+    printf("numfiles: %ld\nreading the filenames....\n", numfiles);
+    
+    dat = malloc(sizeof(dat[0]) * numfiles);
+    assert(dat);
+        
+    dirfd = open(PPM_DIRECTORY, O_RDONLY);
+    assert(dirfd > 0);
+    
+    dd = fdopendir(dirfd);
+    assert(dd);
+
+    long i = 0;
+    while ((de = readdir(dd)) != NULL)
+        if (de->d_name[0] != '.')
+        {
+            if (de->d_type == DT_REG)
+            {
+                assert(strlen(de->d_name) == 36 && strcmp(de->d_name + 32, ".ppm") == 0);
+                strncpy(dat[i++].filename, de->d_name, 32);
+            }
+        }
+    assert(closedir(dd) == 0);
+    printf("filenames read\n");
+
+    files_per_thread = numfiles / NUM_THREADS;
+    if (numfiles % NUM_THREADS)
+        files_per_thread++;
+    
+    pthread_t thread[NUM_THREADS];
+    for (i = 0; i < NUM_THREADS; i++)
+        assert(pthread_create(thread + i, NULL, worker, (void *) i) == 0);
+        
+    for (i = 0; i < NUM_THREADS; i++)
+        assert(pthread_join(thread[i], NULL) == 0);
+    
+    int fd = open(OUTPUT_FILE_B, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    assert(fd > 0);
+    
+    char *s = (char *) dat;
+    ssize_t towrite = sizeof(dat[0]) * numfiles;
+    while (towrite)
+    {
+        ssize_t thistime = write(fd, s, towrite);
+        assert(thistime > 0);
+        towrite -= thistime;
+        s += thistime;
+    }
+    close(fd);
 }

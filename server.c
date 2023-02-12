@@ -125,7 +125,7 @@ typedef struct {
     unsigned char md5[MD5_DIGEST_LENGTH];
     union {
             compacted_filename_t files[0];
-            uint32_t md5s[0];
+            uint32_t md5s[0];       // also, strings: char path[]
     };
 } cached_database_t;
 
