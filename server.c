@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <openssl/md5.h>
+#include <pthread.h>
+#include <math.h>
 
 // gcc -o server server.c -lcrypto
 
@@ -22,9 +24,10 @@
 typedef enum {
     FILES = 0,
     MD5S,
+    MATCHES,
     NUM_CACHES,
 } buffer_type;
-const char cachefile[NUM_CACHES][8] = {"FILES", "MD5S"};
+const char cachefile[NUM_CACHES][8] = {"FILES", "MD5S", "MATCHES"};
 
 
 char logfile_path[100];
@@ -113,6 +116,8 @@ void cached_database_calcsignature_FILE(MD5_CTX *);
 void cached_database_recalculate_FILE(void);
 void cached_database_calcsignature_MD5S(MD5_CTX *);
 void cached_database_recalculate_MD5S(void);
+void cached_database_calcsignature_MATCHES(MD5_CTX *);
+void cached_database_recalculate_MATCHES(void);
 
 // #pragma pack(push, 1)
 
@@ -126,6 +131,7 @@ typedef struct {
     union {
             compacted_filename_t files[0];
             uint32_t md5s[0];       // also, strings: char path[]
+            uint32_t matches[0];
     };
 } cached_database_t;
 
@@ -141,8 +147,9 @@ struct {
     void (*cached_database_calcsignature)(MD5_CTX *);
     void (*cached_database_recalculate)(void);
 } ds[NUM_CACHES] = {
-    {FILES, 0, 0, sizeof(ds[FILES].db->files[0]), NULL, cached_database_calcsignature_FILE, cached_database_recalculate_FILE},
-    {MD5S,  0, 0, sizeof(ds[MD5S].db->md5s[0]),   NULL, cached_database_calcsignature_MD5S, cached_database_recalculate_MD5S},
+    {FILES,   0, 0, sizeof(ds[FILES].db->files[0]),     NULL, cached_database_calcsignature_FILE,    cached_database_recalculate_FILE},
+    {MD5S,    0, 0, sizeof(ds[MD5S].db->md5s[0]),       NULL, cached_database_calcsignature_MD5S,    cached_database_recalculate_MD5S},
+    {MATCHES, 0, 0, sizeof(ds[MATCHES].db->matches[0]), NULL, cached_database_calcsignature_MATCHES, cached_database_recalculate_MATCHES},
 };
 
 
@@ -195,15 +202,15 @@ void cached_database_load(int bt)
     {
         if ((fstat(fd, &statbuf) == 0) && (statbuf.st_size >= sizeof(cached_database_t)) && ((ds[bt].db = malloc(statbuf.st_size)) != NULL))
         {
-            my_assert(ds[bt].unit_size > 0, "unit_size > 0");
-            my_assert(((statbuf.st_size > sizeof(cached_database_t)) && ((statbuf.st_size - sizeof(cached_database_t)) % ds[bt].unit_size == 0)), "cached database size");
+            assert(ds[bt].unit_size > 0);
+            assert(((statbuf.st_size > sizeof(cached_database_t)) && ((statbuf.st_size - sizeof(cached_database_t)) % ds[bt].unit_size == 0)));
             ds[bt].size = (statbuf.st_size - sizeof(cached_database_t)) / ds[bt].unit_size;
             ds[bt].length = ds[bt].size;
             ssize_t toread = statbuf.st_size;
             while (toread)
             {
                 ssize_t readthistime = read(fd, ((char *) ds[bt].db) + statbuf.st_size - toread, toread < 100000000 ? toread : 100000000);
-                my_assert(readthistime > 0, "cache file read");
+                assert(readthistime > 0);
                 toread -= readthistime;
             }
         }
@@ -212,7 +219,7 @@ void cached_database_load(int bt)
     if (ds[bt].db == NULL)
     {
         ds[bt].db = calloc(1, sizeof(cached_database_t));
-        my_assert(ds[bt].db != NULL, "malloc sizeof(cached_database_t)");
+        assert(ds[bt].db != NULL);
         ds[bt].size = 0;
         ds[bt].length = 0;
     }
@@ -220,25 +227,25 @@ void cached_database_load(int bt)
 
 void cached_database_write(int bt)
 {
-    my_assert(ds[bt].length <= ds[bt].size, "length vs size");
-    my_assert(ds[bt].unit_size > 0, "unit_size > 0");
+    assert(ds[bt].length <= ds[bt].size);
+    assert(ds[bt].unit_size > 0);
     if (ds[bt].length < ds[bt].size)
     {
         ds[bt].size = ds[bt].length;    
         ds[bt].db = realloc(ds[bt].db, ds[bt].size * ds[bt].unit_size + sizeof(cached_database_t));
-        my_assert(ds[bt].db != NULL, "realloc cached_database_write");
+        assert(ds[bt].db != NULL);
     }
     
     char fullpath[128];
     sprintf(fullpath, "%s/%s", CACHE_DIR, cachefile[bt]);
     int fd = open(fullpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    my_assert(fd > 0, "open cached_database_write");
+    assert(fd > 0);
     
     ssize_t towrite = ds[bt].size * ds[bt].unit_size + sizeof(cached_database_t);
     while (towrite)
     {
         ssize_t writtenthistime = write(fd, ((char *)ds[bt].db) + ds[bt].size * ds[bt].unit_size + sizeof(cached_database_t) - towrite, towrite < 100000000 ? towrite : 100000000);
-        my_assert(writtenthistime > 0, "cached_database_write write");
+        assert(writtenthistime > 0);
         towrite -= writtenthistime;
     }
     close(fd);
@@ -246,17 +253,17 @@ void cached_database_write(int bt)
 
 void ensure_size_for_more_items(int bt, int count)
 {
-    my_assert(ds[bt].db != NULL, "ensure_size_for_more_items non-null");
+    assert(ds[bt].db != NULL);
     while (ds[bt].length + count > ds[bt].size)
     {
-        my_assert(ds[bt].unit_size > 0, "ensure_size_for_more_items unit_size > 0");
+        assert(ds[bt].unit_size > 0);
         if (ds[bt].size)
             ds[bt].size *= 2;
         else
             ds[bt].size = 1024;
             
         ds[bt].db = realloc(ds[bt].db, ds[bt].size * ds[bt].unit_size + sizeof(cached_database_t));
-        my_assert(ds[bt].db != NULL, "realloc ensure_size_for_more_items");
+        assert(ds[bt].db != NULL);
     }
 }
 
@@ -310,10 +317,10 @@ int binary_search_for_filename(char *name)
 void recurse_in_directory_for_md5_files(MD5_CTX *cp, int dirfd, const char *d_name, char **buf, uint64_t *buf_size)
 {
     dirfd = openat(dirfd, d_name, O_RDONLY);
-    my_assert(dirfd > 0, "recurse_in_directory_for_md5_files openat dir");
+    assert(dirfd > 0);
 
     DIR *dd = fdopendir(dirfd);
-    my_assert(dd != NULL, "recurse_in_directory_for_md5_files fdopendir");
+    assert(dd != NULL);
     
     struct dirent *de;
     while ((de = readdir(dd)) != NULL)
@@ -322,15 +329,15 @@ void recurse_in_directory_for_md5_files(MD5_CTX *cp, int dirfd, const char *d_na
             if (de->d_type == DT_REG && strstr(de->d_name, ".md5s"))
             {
                 int fd = openat(dirfd, de->d_name, O_RDONLY);
-                my_assert(fd > 0, "recurse_in_directory_for_md5_files openat file");
+                assert(fd > 0);
                 struct stat statbuf;
-                my_assert(fstat(fd, &statbuf) == 0, "recurse_in_directory_for_md5_files fstat");
+                assert(fstat(fd, &statbuf) == 0);
                 
                 if (cp)
                 {
                     MD5_Update(cp, (unsigned char*) (de->d_name), strlen(de->d_name));  // I hope these files are always parsed in the same order
-                    MD5_Update(cp, (unsigned char*) (&statbuf.st_size), sizeof(off_t));
-                    MD5_Update(cp, (unsigned char*) (&statbuf.st_mtim), sizeof(struct timespec));
+                    MD5_Update(cp, (unsigned char*) (&statbuf.st_size), sizeof(statbuf.st_size));
+                    MD5_Update(cp, (unsigned char*) (&statbuf.st_mtim), sizeof(statbuf.st_mtim));
                 }
                 else
                 {
@@ -338,27 +345,27 @@ void recurse_in_directory_for_md5_files(MD5_CTX *cp, int dirfd, const char *d_na
 
                     *buf_size += statbuf.st_size;
                     *buf = realloc(*buf, *buf_size);
-                    my_assert(*buf != NULL, "recurse_in_directory_for_md5_files realloc");
+                    assert(*buf != NULL);
                     char *read_into_here = *buf + orig_size;
 
                     while (statbuf.st_size)
                     {
                         ssize_t bytesread = read(fd, read_into_here, statbuf.st_size < 100000000 ? statbuf.st_size : 100000000);
-                        my_assert(bytesread > 0, "recurse_in_directory_for_md5_files read");
+                        assert(bytesread > 0);
                         statbuf.st_size -= bytesread;
                         read_into_here += bytesread;
                     }
                 }
-                my_assert(close(fd) == 0, "recurse_in_directory_for_md5_files close");
+                assert(close(fd) == 0);
             }
 
             if (de->d_type == DT_DIR)
                 recurse_in_directory_for_md5_files(cp, dirfd, de->d_name, buf, buf_size);
         }
-    my_assert(closedir(dd) == 0, "recurse_in_directory_for_md5_files closedir");
+    assert(closedir(dd) == 0);
 }
 
-void cached_database_calcsignature_FILE(MD5_CTX *c)
+void cached_database_calcsignature_FILE(MD5_CTX *cp)
 {
     struct stat statbuf;
     char fullpath[128];
@@ -366,8 +373,8 @@ void cached_database_calcsignature_FILE(MD5_CTX *c)
     int stat_return = stat(fullpath, &statbuf);
     if (stat_return != 0)
         printf("index directory unreachable: if the disk mounted?\nsudo mount /dev/disk/by-id/usb-WD_Elements_25A3_5647483645314547-0:0 /home/joeruff/m\n");
-    my_assert(stat_return == 0, "accessing index directory");
-    MD5_Update(c, (unsigned char *) (&statbuf.st_mtime), sizeof(statbuf.st_mtime));
+    assert(stat_return == 0);
+    MD5_Update(cp, (unsigned char *) (&statbuf.st_mtim), sizeof(statbuf.st_mtim));
 }
 
 void cached_database_recalculate_FILE()
@@ -375,43 +382,45 @@ void cached_database_recalculate_FILE()
     char fullpath[128];
     sprintf(fullpath, "%s/%s", MOUNTED_DISK, "index");
     DIR *dd = opendir(fullpath);
-    my_assert(dd != NULL, "opendir");
+    assert(dd != NULL);
     
+    long countcount = 0;
     struct dirent *de;
     while ((de = readdir(dd)) != NULL)
     if (de->d_name[0] != '.')
     {
-        my_assert(strlen(de->d_name) == 36, "filename length");
+        assert(strlen(de->d_name) == 36);
         ensure_size_for_more_items(FILES, 1);
         ds[FILES].db->files[ds[FILES].length].l = strtoull(de->d_name + 16, NULL, 16);
         de->d_name[16] ='\0';
         ds[FILES].db->files[ds[FILES].length].h = strtoull(de->d_name, NULL, 16);
         ds[FILES].length++;
+        countcount++;
     }
-    my_assert(closedir(dd) == 0, "closedir");
+    assert(closedir(dd) == 0);
     
     qsort(&(ds[FILES].db->files[0]), ds[FILES].length, ds[FILES].unit_size, cmp_compacted_filename_t);
 }
 
 void cached_database_calcsignature_MD5S(MD5_CTX *cp)
 {
-    int dirfd = open(MOUNTED_DISK, O_RDONLY);
-    my_assert(dirfd > 0, "open MOUNTED_DISK");    
     // The MD5s are linked to the filename. So, if the filenames change, the MD5s have to change, too...
-    my_assert(ds[FILES].size == ds[FILES].length, "verify that FILES have been compacted");
+    assert(ds[FILES].size == ds[FILES].length);
     MD5_Update(cp, (unsigned char*) (ds[FILES].db), ds[FILES].size * ds[FILES].unit_size);
+    int dirfd = open(MOUNTED_DISK, O_RDONLY);
+    assert(dirfd > 0);    
     recurse_in_directory_for_md5_files(cp, dirfd, "in", NULL, NULL);
 }
 
 void cached_database_recalculate_MD5S()
 {
     int dirfd = open(MOUNTED_DISK, O_RDONLY);
-    my_assert(dirfd > 0, "open MOUNTED_DISK 2");   
+    assert(dirfd > 0);   
         
     assert(ds[MD5S].db != NULL);
     uint64_t actual_size_in_bytes = sizeof(cached_database_t) + ds[FILES].length * ds[MD5S].unit_size;
     ds[MD5S].db = realloc(ds[MD5S].db, actual_size_in_bytes);
-    my_assert(ds[MD5S].db != NULL, "realloc cached_database_write");
+    assert(ds[MD5S].db != NULL);
     recurse_in_directory_for_md5_files(NULL, dirfd, "in", (char **)&ds[MD5S].db, &actual_size_in_bytes);
 //    recurse_in_directory_for_md5_files(NULL, dirfd, "in/cefc5d7f36884d0c9d2a1887e8107704/", (char **)&ds[MD5S].db, &actual_size_in_bytes);
     
@@ -426,7 +435,7 @@ void cached_database_recalculate_MD5S()
         char *nextnl = scanfrom;
         while ((nextnl < scan_end) && (*nextnl != '\n'))
             nextnl++;
-        my_assert(nextnl != scan_end, "newlines");
+        assert(nextnl != scan_end);
         *nextnl = '\0';
         
         int idx = binary_search_for_filename(scanfrom);
@@ -451,6 +460,208 @@ void cached_database_recalculate_MD5S()
     }
     ds[MD5S].size = ds[MD5S].length;
     ds[MD5S].db = realloc(ds[MD5S].db, ds[MD5S].size * ds[MD5S].unit_size + sizeof(cached_database_t));
+}
+
+void cached_database_calcsignature_MATCHES(MD5_CTX *cp)
+{
+    // The MD5s are linked to the filename. So, if the filenames change, the MD5s have to change, too...
+    assert(ds[FILES].size == ds[FILES].length);
+    MD5_Update(cp, (unsigned char*) (ds[FILES].db), ds[FILES].size * ds[FILES].unit_size);
+    struct stat statbuf;
+    char fullpath[128];
+    sprintf(fullpath, "%s/%s", MOUNTED_DISK, "match.bin");
+    int stat_return = stat(fullpath, &statbuf);
+    if (stat_return != 0)
+        printf("match directory unreachable: if the disk mounted?\nsudo mount /dev/disk/by-id/usb-WD_Elements_25A3_5647483645314547-0:0 /home/joeruff/m\n");
+    assert(stat_return == 0);
+    MD5_Update(cp, (unsigned char*) (&statbuf.st_size), sizeof(statbuf.st_size));
+    MD5_Update(cp, (unsigned char*) (&statbuf.st_mtim), sizeof(statbuf.st_mtim));
+}
+
+#define NUM_THREADS (36)
+
+double lut[6][3] = {
+    { 5.00, 19.21, 34.37, },
+    { 0.83,  1.26,  0.36, },
+    { 1.01,  0.44,  0.45, },
+    { 0.52,  0.53,  0.14, },
+    { 0.47,  0.28,  0.18, },
+    { 0.30,  0.14,  0.27, },
+};
+
+struct {
+    char filename[32];
+    int32_t param[3][16];
+} *dat = NULL;
+    
+double adjustscore(int color, int32_t *one, int32_t *two)
+{
+    double to_return = 0.0;
+    
+    int i;
+    for (i = 0; i < 15; i++)
+    {
+        int32_t to_match = one[i];
+        
+        int j;
+        for (j = 0; j < 15; j++)
+            if (to_match == two[j])
+                break;
+        if (j < 15)
+        {
+            assert(to_match == two[j]);
+            assert(to_match != 0);
+            
+            if (to_match < 0)
+                to_match = -to_match;
+            
+            int32_t x = to_match & 0xFF;
+            int32_t y = (to_match >> 8) & 0xFF;
+            if (y > x)
+                x = y;
+            if (x > 5)
+                x = 5;
+            
+            to_return -= lut[x][color];
+        }
+    }
+    return to_return;
+}
+
+
+void *worker(void *arg)
+{
+    int32_t *buf = *((int32_t **) arg);
+    int32_t thread_number = buf[0];
+    long size = 1000;
+    long num = 0;
+    buf = realloc(buf, sizeof(buf[0]) * size);
+    assert(buf);
+    buf[0] = 0;
+    
+    uint64_t files_per_thread = ds[FILES].size / NUM_THREADS;
+    if (ds[FILES].size % NUM_THREADS)
+        files_per_thread++;
+    
+    long i;
+    for (i = files_per_thread * thread_number; i < files_per_thread * thread_number + files_per_thread; i++)
+    {        
+        int32_t *Y1 = dat[i].param[0];
+        int32_t *I1 = dat[i].param[1];
+        int32_t *Q1 = dat[i].param[2];
+        
+        if (i % 10000 == 0)
+        {
+            printf("%d/%d %ld/%ld\n", thread_number, NUM_THREADS, i, ds[FILES].size);
+            fflush(stdout);
+        }
+        
+        long j;
+        for (j = i + 1; j < ds[FILES].size; j++)
+        {
+            int32_t *Y2 = dat[j].param[0];
+            int32_t *I2 = dat[j].param[1];
+            int32_t *Q2 = dat[j].param[2];
+            
+            double score = 0.0;
+            score =+ lut[0][0] * fabs(Y1[0] - Y2[0]) / 255.0;
+            score =+ lut[0][1] * fabs(I1[0] - I2[0]) / 255.0;
+            score =+ lut[0][2] * fabs(Q1[0] - Q2[0]) / 255.0;
+            
+            score += adjustscore(0, Y1 + 1, Y2 + 1);
+            score += adjustscore(1, I1 + 1, I2 + 1);
+            score += adjustscore(2, Q1 + 1, Q2 + 1);
+            
+            if (score < -12.0)
+            {
+                while (num + 6 > size)
+                {
+                    size *= 2;
+                    buf = realloc(buf, sizeof(buf[0]) * size);
+                    assert(buf);
+                }
+                buf[num++] = i;
+                buf[num++] = j;
+                if (1000000.0 * score < -1000000000.0)
+                    buf[num++] = -1000000000;
+                else
+                    buf[num++] = 1000000.0 * score;
+            }
+        }
+    }
+    buf[num++] = 0;
+    buf[num++] = 0;
+    buf[num++] = 0;
+    *((int32_t **) arg) = buf;
+}
+
+void cached_database_recalculate_MATCHES()
+{
+    
+    char fullpath[128];
+    sprintf(fullpath, "%s/%s", MOUNTED_DISK, "match.bin");
+
+    int fd = open(fullpath, O_RDONLY);
+    assert(fd > 0);
+    
+    struct stat statbuf;
+    assert(fstat(fd, &statbuf) == 0);
+    
+    assert(ds[FILES].size == ds[FILES].length);
+    assert(statbuf.st_size == sizeof(dat[0]) * ds[FILES].size);
+    dat = (void *) malloc(statbuf.st_size);
+    assert(dat);
+    
+    char *writehere = (char *) dat;
+    ssize_t toread = statbuf.st_size;
+    while (toread)
+    {
+        ssize_t trythismuch = toread;
+        if (trythismuch > 100000000)
+            trythismuch = 100000000;
+        ssize_t readthistime = read(fd, writehere, trythismuch);
+        assert(readthistime > 0);
+        toread -= readthistime;
+        writehere += readthistime;
+    }
+    close(fd);
+    
+    int32_t *buffers[NUM_THREADS];
+    pthread_t thread[NUM_THREADS];
+    
+    printf("%ld about to start\n", (long) time(NULL));
+    fflush(stdout);
+    int i;
+    for (i = 0; i < NUM_THREADS; i++)
+    {
+        buffers[i] = malloc(sizeof(buffers[0][0]));
+        assert(buffers[i]);
+        buffers[i][0] = i;
+        assert(pthread_create(thread + i, NULL, worker, (void *) (buffers + i)) == 0);
+    }
+    
+    for (i = 0; i < NUM_THREADS; i++)
+        assert(pthread_join(thread[i], NULL) == 0);
+    printf("%ld done\n", (long) time(NULL));
+    fflush(stdout);
+    // This usually takes 1676258745 - 1676220710 = 10.6 hours
+
+    assert(ds[MATCHES].db != NULL);
+    ds[MATCHES].size = 0;
+    ds[MATCHES].length = 0;
+    for (i = 0; i < NUM_THREADS; i++)
+    {
+        int32_t *scan = buffers[i];
+        while (scan[0] || scan[1] || scan[2]) scan++;
+        
+        ds[MATCHES].size += scan - buffers[i];
+        ds[MATCHES].db = realloc(ds[MATCHES].db, ds[MATCHES].size * ds[MATCHES].unit_size + sizeof(cached_database_t));
+        assert(ds[MATCHES].db);
+        memcpy(&(ds[MATCHES].db->matches[ds[MATCHES].length]), buffers[i], (scan - buffers[i]) * ds[MATCHES].unit_size);
+        ds[MATCHES].length = ds[MATCHES].size;
+        free(buffers[i]);
+        buffers[i] = NULL;
+    }
 }
 
 /*
@@ -499,7 +710,7 @@ int main()
             ds[i].cached_database_calcsignature(&c);
             unsigned char result_after[MD5_DIGEST_LENGTH];
             MD5_Final(result_after, &c);
-            my_assert(memcmp(result, result_after, MD5_DIGEST_LENGTH) == 0, "changed while calculatin cached db");
+            assert(memcmp(result, result_after, MD5_DIGEST_LENGTH) == 0);
             
             memcpy(ds[i].db->md5, result, MD5_DIGEST_LENGTH);
             cached_database_write(i);
@@ -645,14 +856,14 @@ int main()
     char logline[100];
 
     int fd = open("index.html", O_RDONLY);
-    my_assert(fd > 0, "open index.html");
+    assert(fd > 0);
     struct stat statbuf;
     assert(fstat(fd, &statbuf) == 0);
     char *index_buf = malloc(statbuf.st_size + 1000);
-    my_assert(index_buf != NULL, "malloc");
+    assert(index_buf != NULL);
     sprintf(index_buf, "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Type: text/html\r\nContent-Length: %ld\r\n\r\n", statbuf.st_size);
     int index_buf_len = strlen(index_buf);
-    my_assert(read(fd, index_buf + index_buf_len, statbuf.st_size) == statbuf.st_size, "read index.html in one attempt");
+    assert(read(fd, index_buf + index_buf_len, statbuf.st_size) == statbuf.st_size);
     index_buf_len += statbuf.st_size;
     close(fd);
     
@@ -665,18 +876,18 @@ int main()
     addr.sin_port = htons(80);
     
     fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd = socket(AF_INET, SOCK_STREAM, 0);
-    my_assert(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd != -1, "socket");
+    assert(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd != -1);
 
     int yes = 1;    
-    my_assert(setsockopt(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) != -1, "setsockopt");
+    assert(setsockopt(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) != -1);
 
-    my_assert(bind(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, (struct sockaddr *) &addr,  sizeof(addr)) == 0, "bind");
-    my_assert(listen(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, 5) == 0, "listen");
+    assert(bind(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, (struct sockaddr *) &addr,  sizeof(addr)) == 0);
+    assert(listen(fds[MAXIMUM_NUMBER_OF_CLIENT_LISTENERS + 0].fd, 5) == 0);
 
     int dirfd_index = open("/home/joeruff/m/index/", O_RDONLY);
-    my_assert(dirfd_index > 0, "open /home/joeruff/m/index/");
+    assert(dirfd_index > 0);
     int dirfd_i = open("/home/joeruff/m/i/", O_RDONLY);
-    my_assert(dirfd_i > 0, "open /home/joeruff/m/i/");
+    assert(dirfd_i > 0);
 
     write_a_log_line("start loop");
     printf("start loop\n");

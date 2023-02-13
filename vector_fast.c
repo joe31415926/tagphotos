@@ -179,10 +179,7 @@ void *worker(void *arg)
             vectorfile(Aarr, idx, buf, dat[start_idx * files_per_thread + i].param);
             
             if (i % 1000 == 0)
-            {
                 printf("%ld %ld/%ld\n", start_idx, i, files_per_thread);
-                fflush(stdout);
-            }
         }
 }
 
@@ -219,6 +216,9 @@ int main()
     dd = fdopendir(dirfd);
     assert(dd);
 
+    char *buf = malloc(BYTES_PER_FILE);
+    assert(buf);
+    long lasttime = 0;
     long i = 0;
     while ((de = readdir(dd)) != NULL)
         if (de->d_name[0] != '.')
@@ -227,33 +227,29 @@ int main()
             {
                 assert(strlen(de->d_name) == 36 && strcmp(de->d_name + 32, ".ppm") == 0);
                 strncpy(dat[i++].filename, de->d_name, 32);
+                
+                int fd = openat(dirfd, de->d_name, O_RDONLY);
+                assert(fd > 0);
+                
+                char *tohere = buf;
+                ssize_t toread = BYTES_PER_FILE;
+                while (toread)
+                {
+                    ssize_t readthistime = read(fd, tohere, toread);
+                    assert(readthistime > 0);
+                    toread -= readthistime;
+                    tohere += readthistime;
+                }
+                close(fd);
+                
+                long now = time(NULL);
+                if (now != lasttime)
+                {
+                    lasttime = now;
+                    printf("%ld %ld\n", i, numfiles);
+                }
             }
         }
     assert(closedir(dd) == 0);
     printf("filenames read\n");
-
-    files_per_thread = numfiles / NUM_THREADS;
-    if (numfiles % NUM_THREADS)
-        files_per_thread++;
-    
-    pthread_t thread[NUM_THREADS];
-    for (i = 0; i < NUM_THREADS; i++)
-        assert(pthread_create(thread + i, NULL, worker, (void *) i) == 0);
-        
-    for (i = 0; i < NUM_THREADS; i++)
-        assert(pthread_join(thread[i], NULL) == 0);
-    
-    int fd = open(OUTPUT_FILE_B, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    assert(fd > 0);
-    
-    char *s = (char *) dat;
-    ssize_t towrite = sizeof(dat[0]) * numfiles;
-    while (towrite)
-    {
-        ssize_t thistime = write(fd, s, towrite);
-        assert(thistime > 0);
-        towrite -= thistime;
-        s += thistime;
-    }
-    close(fd);
 }
